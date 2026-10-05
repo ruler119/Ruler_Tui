@@ -1,0 +1,205 @@
+-- Tui
+local DOORS_PATH = game.Workspace.map.HALLOWEEN.TrickorTreatDoors
+local COOLDOWN_TIME = 20
+local OFFSET_DISTANCE = 3.5
+local OFFSET_HEIGHT = 3
+
+local MERCHANT_INTERVAL = 60
+local MERCHANT_DISTANCE = 4
+local MERCHANT_HEIGHT = 2
+
+local player = game.Players.LocalPlayer
+local cooldowns = {}
+local isRunning = false
+local MERCHANT_PATH = nil
+
+local function getCharacter()
+    local char = player.Character or player.CharacterAdded:Wait()
+    return char
+end
+
+local function waitForMerchant()
+    local attempts = 0
+    while attempts < 30 do
+        local success, result = pcall(function()
+            return game.Workspace.map.HALLOWEEN.HalloweenArea["Exclusive Items"]["troll:Gold"]
+        end)
+        if success and result then
+            MERCHANT_PATH = result
+            return result
+        end
+        task.wait(1)
+        attempts = attempts + 1
+    end
+    warn("MYM521: 找不到商人！请确认游戏已完全加载。")
+    return nil
+end
+
+local function triggerPrompt(target)
+    local prompt = target:FindFirstChildOfClass("ProximityPrompt")
+    if not prompt then
+        for _, descendant in pairs(target:GetDescendants()) do
+            if descendant:IsA("ProximityPrompt") then
+                prompt = descendant
+                break
+            end
+        end
+    end
+
+    if prompt then
+        local originalHold = prompt.HoldDuration
+        prompt.HoldDuration = 0
+        task.wait(0.1)
+        
+        if fireproximityprompt then
+            fireproximityprompt(prompt)
+        end
+        
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(0.15)
+            prompt:InputHoldEnd()
+        end)
+        
+        task.wait(0.1)
+        prompt.HoldDuration = originalHold
+    end
+end
+
+local function teleportToDoor(door)
+    local char = getCharacter()
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart")
+    local targetPos = door.Position - (door.CFrame.LookVector * OFFSET_DISTANCE) + Vector3.new(0, OFFSET_HEIGHT, 0)
+    hrp.CFrame = CFrame.new(targetPos, door.Position)
+    task.wait(0.3)
+end
+
+local function teleportToMerchant()
+    local merchant = MERCHANT_PATH or waitForMerchant()
+    if not merchant then return end
+    
+    local char = getCharacter()
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart")
+    
+    local pivot = merchant:GetPivot()
+    local merchantPos = pivot.Position
+    
+    local targetPos = merchantPos + (pivot.LookVector * MERCHANT_DISTANCE) + Vector3.new(0, MERCHANT_HEIGHT, 0)
+    
+    hrp.CFrame = CFrame.new(targetPos, merchantPos)
+    
+    task.wait(0.5)
+    
+    triggerPrompt(merchant)
+end
+
+local function mainLoop()
+    while isRunning do
+        if not DOORS_PATH then 
+            task.wait(2)
+            continue 
+        end
+
+        for _, door in pairs(DOORS_PATH:GetChildren()) do
+            if not isRunning then return end 
+            
+            if door.Name == "Door" then
+                local now = tick()
+                if cooldowns[door] and now < cooldowns[door] then
+                    continue
+                end
+
+                teleportToDoor(door)
+                if not isRunning then return end
+                triggerPrompt(door)
+
+                cooldowns[door] = tick() + COOLDOWN_TIME
+                task.wait(1.5) 
+            end
+        end
+    end
+end
+
+local function merchantLoop()
+    while isRunning do
+        task.wait(MERCHANT_INTERVAL)
+        if isRunning then
+            teleportToMerchant()
+        end
+    end
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AutoDoorGui"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(0, 45, 0, 45)
+btn.Position = UDim2.new(1, -15, 0, 15)
+btn.AnchorPoint = Vector2.new(1, 0)
+btn.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+btn.Text = "关"
+btn.TextSize = 16
+btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+btn.Font = Enum.Font.GothamBold
+btn.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = btn
+
+local dragging, dragInput, dragStart, startPos
+btn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = btn.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+btn.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+game:GetService("UserInputService").InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+btn.MouseButton1Down:Connect(function()
+    btn.Size = UDim2.new(0, 40, 0, 40)
+end)
+btn.MouseButton1Up:Connect(function()
+    btn.Size = UDim2.new(0, 45, 0, 45)
+end)
+
+btn.MouseButton1Click:Connect(function()
+    isRunning = not isRunning
+    if isRunning then
+        btn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        btn.Text = "开"
+        
+        task.spawn(function()
+            waitForMerchant()
+            teleportToMerchant()
+            
+            if isRunning then
+                task.spawn(mainLoop)
+                task.spawn(merchantLoop)
+            end
+        end)
+        
+    else
+        btn.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        btn.Text = "关"
+    end
+end)
